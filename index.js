@@ -1,67 +1,105 @@
 const Hyperswarm = require('hyperswarm')
 const crypto = require('crypto')
-const readline = require('readline')
 
-const TOPIC = crypto.createHash('sha256').update('hyperswarm-chat').digest()
-const MAX_PEERS = 64
+const messages = []
+let waitingForRecv = false
+let swarm = null
+let conns = new Set()
 
-let username = 'Anonymous'
-let usernameSet = false
+function writeResponse(data) {
+  process.stdout.write(JSON.stringify(data) + '\n')
+}
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-})
+function processCommand(line) {
+  let cmd
+  try {
+    cmd = JSON.parse(line)
+  } catch (e) {
+    writeResponse({ error: 'Invalid JSON', raw: line })
+    return
+  }
 
-const conns = new Set()
-const swarm = new Hyperswarm()
+  switch (cmd.cmd) {
+    case 'create':
+      if (!cmd.topic) {
+        writeResponse({ status: 'error', error: 'Missing topic', cmd: 'create' })
+        return
+      }
+      doCreate(cmd.topic)
+      break
 
-process.stdout.write('\x1b[36mEnter your name: \x1b[0m')
-rl.question('', (name) => {
-  username = name.trim() || 'Anonymous'
-  usernameSet = true
-  process.stdout.write('\x1b[32m' + username + '\x1b[0m joined the chat\n')
-  process.stdout.write('Connected to peers on topic: ' + TOPIC.toString('hex').slice(0, 16) + '...\n\n')
+    case 'send':
+      if (!cmd.msg) {
+        writeResponse({ status: 'error', error: 'Missing msg', cmd: 'send' })
+        return
+      }
+      doSend(cmd.msg)
+      break
 
-  const discovery = swarm.join(TOPIC, { client: true, server: true, limit: MAX_PEERS })
+    case 'recv':
+      doRecv()
+      break
+
+    case 'nrecv':
+      doNrecv()
+      break
+
+    default:
+      writeResponse({ error: ' Unknown command', cmd: cmd.cmd })
+  }
+}
+
+function doCreate(topic) {
+  if (swarm) {
+    swarm.destroy()
+  }
+
+  messages.length = 0
+  waitingForRecv = false
+  conns.clear()
+
+  const topicBuffer = crypto.createHash('sha256').update(topic).digest()
+
+  swarm = new Hyperswarm()
+
+  swarm.on('connection', (conn, info) => {
+    conns.add(conn)
+
+    conn.on('data', (data) => {
+      const msg = data.toString().trim()
+      if (msg) {
+        messages.push(msg)
+        if (waitingForRecv) {
+          waitingForRecv = false
+          const msgToSend = messages.shift()
+          writeResponse({ msg: msgToSend, cmd: 'recv' })
+        }
+      }
+    })
+
+    conn.on('close', () => {
+      conns.delete(conn)
+    })
+
+    conn.on('error', (err) => {
+      conns.delete(conn)
+    })
+  })
+
+  const discovery = swarm.join(topicBuffer, { client: true, server: true, limit: 64 })
 
   discovery.flushed().then(() => {
-    process.stdout.write('\x1b[33mConnected to swarm!\x1b[0m\n')
+    writeResponse({ status: 'ok', cmd: 'create' })
   }).catch(err => {
-    process.stderr.write('Discovery error: ' + err.message + '\n')
+    writeResponse({ status: 'error', error: err.message, cmd: 'create' })
   })
-})
+}
 
-swarm.on('connection', (conn, info) => {
-  conns.add(conn)
-  const peerId = conn.remotePublicKey ? conn.remotePublicKey.toString('hex').slice(0, 8) : 'unknown'
-
-  process.stdout.write('\x1b[36m* connected to ' + peerId + ' *\x1b[0m\n')
-
-  conn.on('data', (data) => {
-    try {
-      const msg = JSON.parse(data.toString())
-      process.stdout.write('\x1b[35m<' + msg.username + '>\x1b[0m ' + msg.text + '\n')
-    } catch (e) {
-      process.stdout.write(data.toString() + '\n')
-    }
-  })
-
-  conn.on('close', () => {
-    conns.delete(conn)
-    process.stdout.write('\x1b[31m* disconnected from ' + peerId + ' *\x1b[0m\n')
-  })
-
-  conn.on('error', (err) => {
-    process.stdout.write('\x1b[31mConnection error: ' + err.message + '\x1b[0m\n')
-  })
-})
-
-rl.on('line', (line) => {
-  const text = line.trim()
-  if (!text || !usernameSet) return
-
-  const msg = JSON.stringify({ username, text })
+function doSend(msg) {
+  if (!swarm) {
+    writeResponse({ status: 'error', error: 'Not connected', cmd: 'send' })
+    return
+  }
 
   for (const conn of conns) {
     try {
@@ -70,15 +108,55 @@ rl.on('line', (line) => {
     }
   }
 
-  process.stdout.write('\x1b[90mYou: \x1b[0m' + text + '\n')
-})
+  writeResponse({ status: 'ok', cmd: 'send' })
+}
 
-process.on('SIGINT', () => {
-  process.stdout.write('\n\x1b[33mGoodbye!\x1b[0m\n')
-  swarm.destroy()
-  process.exit(0)
+function doRecv() {
+  if (messages.length > 0) {
+    const msg = messages.shift()
+    writeResponse({ msg: msg, cmd: 'recv' })
+    return
+  }
+
+  waitingForRecv = true
+}
+
+function doNrecv() {
+  if (messages.length > 0) {
+    const msg = messages.shift()
+    writeResponse({ msg: msg, cmd: 'nrecv' })
+  } else {
+    writeResponse({ msg: null, cmd: 'nrecv' })
+  }
+}
+
+process.stdin.setEncoding('utf8')
+
+let buffer = ''
+
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+
+  let newlineIndex
+  while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+    const line = buffer.slice(0, newlineIndex).trim()
+    buffer = buffer.slice(newlineIndex + 1)
+
+    if (line) {
+      processCommand(line)
+    }
+  }
 })
 
 process.on('exit', () => {
-  swarm.destroy()
+  if (swarm) {
+    swarm.destroy()
+  }
+})
+
+process.on('SIGINT', () => {
+  if (swarm) {
+    swarm.destroy()
+  }
+  process.exit(0)
 })
