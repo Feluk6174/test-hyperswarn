@@ -1,0 +1,12 @@
+{
+  "name": "hyperswarm-chat",
+  "version": "1.0.0",
+  "description": "P2P CLI chat using Hyperswarm",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "hyperswarm": "^4.17.0"
+  }
+}
