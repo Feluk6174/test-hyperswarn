@@ -28,4 +28,4 @@ if n == 1:
     print(hs.nrecv())
 
 
-hs.close()
+hs.kill()

@@ -64,6 +64,15 @@ class HyperswarmInterface:
         self.proc.stdin.close()
         self.proc.wait()
 
+    def kill(self):
+        self._listener_running = False
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+
     def _send(self, obj):
         self.proc.stdin.write(json.dumps(obj) + '\n')
         self.proc.stdin.flush()

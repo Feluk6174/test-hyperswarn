@@ -176,3 +176,10 @@ process.on('SIGINT', () => {
   }
   process.exit(0)
 })
+
+process.on('SIGTERM', () => {
+  if (swarm) {
+    swarm.destroy()
+  }
+  process.exit(0)
+})
