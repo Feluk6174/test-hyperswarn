@@ -10,6 +10,10 @@ function writeResponse(data) {
   process.stdout.write(JSON.stringify(data) + '\n')
 }
 
+function writeEvent(data) {
+  process.stderr.write(JSON.stringify(data) + '\n')
+}
+
 function processCommand(line) {
   let cmd
   try {
@@ -44,6 +48,10 @@ function processCommand(line) {
       doNrecv()
       break
 
+    case 'peers':
+      doPeers()
+      break
+
     default:
       writeResponse({ error: ' Unknown command', cmd: cmd.cmd })
   }
@@ -63,7 +71,10 @@ function doCreate(topic) {
   swarm = new Hyperswarm()
 
   swarm.on('connection', (conn, info) => {
+    const peerId = conn.remotePublicKey ? conn.remotePublicKey.toString('hex').slice(0, 8) : 'unknown'
     conns.add(conn)
+
+    writeEvent({ event: 'peer_connected', id: peerId })
 
     conn.on('data', (data) => {
       const msg = data.toString().trim()
@@ -79,6 +90,7 @@ function doCreate(topic) {
 
     conn.on('close', () => {
       conns.delete(conn)
+      writeResponse({ event: 'peer_disconnected', id: peerId })
     })
 
     conn.on('error', (err) => {
@@ -128,6 +140,10 @@ function doNrecv() {
   } else {
     writeResponse({ msg: null, cmd: 'nrecv' })
   }
+}
+
+function doPeers() {
+  writeResponse({ count: conns.size, cmd: 'peers' })
 }
 
 process.stdin.setEncoding('utf8')

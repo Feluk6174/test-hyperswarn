@@ -1,6 +1,7 @@
 import subprocess
 import json
 import os
+import threading
 
 
 class HyperswarmInterface:
@@ -16,6 +17,11 @@ class HyperswarmInterface:
             bufsize=1,
             cwd=self.cwd
         )
+        self._events = []
+        self._events_lock = threading.Lock()
+        self._listener_running = True
+        self._listener_thread = threading.Thread(target=self._listen_stderr, daemon=True)
+        self._listener_thread.start()
 
     def create(self, topic):
         self._send({'cmd': 'create', 'topic': topic})
@@ -33,7 +39,28 @@ class HyperswarmInterface:
         self._send({'cmd': 'nrecv'})
         return self._recv()['msg']
 
+    def peer_count(self):
+        self._send({'cmd': 'peers'})
+        return self._recv()['count']
+
+    def get_event(self, timeout=0):
+        if timeout == 0:
+            with self._events_lock:
+                if self._events:
+                    return self._events.pop(0)
+            return None
+        import time
+        start = time.time()
+        while time.time() - start < timeout:
+            with self._events_lock:
+                if self._events:
+                    return self._events.pop(0)
+            import time
+            time.sleep(0.1)
+        return None
+
     def close(self):
+        self._listener_running = False
         self.proc.stdin.close()
         self.proc.wait()
 
@@ -43,3 +70,14 @@ class HyperswarmInterface:
 
     def _recv(self):
         return json.loads(self.proc.stdout.readline())
+
+    def _listen_stderr(self):
+        while self._listener_running:
+            try:
+                line = self.proc.stderr.readline()
+                if line:
+                    event = json.loads(line.strip())
+                    with self._events_lock:
+                        self._events.append(event)
+            except Exception:
+                pass
