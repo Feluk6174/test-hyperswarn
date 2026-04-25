@@ -6,6 +6,8 @@ hs = HyperswarmInterface()
 n = int(input("num"))
 print(hs.create("elmeutopic"))
 
+time.sleep(4)
+
 if n == 1:
     print(hs.send("hello world!"))
 
